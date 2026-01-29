@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+php -r '
+require __DIR__ . "/../vendor/autoload.php";
+$dotenv = Dotenv\Dotenv::createImmutable(dirname(__DIR__));
+$dotenv->safeLoad();
+
+$pdo = App\Infrastructure\Db\Connection::pdo();
+$dir = dirname(__DIR__) . "/database/migrations";
+$files = glob($dir . "/*.sql");
+sort($files);
+
+foreach ($files as $f) {
+  $sql = file_get_contents($f);
+  if ($sql === false) throw new Exception("Cannot read $f");
+  $pdo->exec($sql);
+  echo "applied: " . basename($f) . PHP_EOL;
+}
+'
