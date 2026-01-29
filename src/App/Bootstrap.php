@@ -32,6 +32,8 @@ final class Bootstrap
     $router->get('/wallets/deposit-address', [\App\Domain\Wallets\WalletController::class, 'getDepositAddress'], requireAuth: true);
 
     $router->get('/ledger/balance', [\App\Domain\Ledger\LedgerController::class, 'balance'], requireAuth: true);
+    $router->post('/withdrawals', [\App\Domain\Withdrawals\WithdrawalController::class, 'create'], requireAuth: true);
+
 
 
     $req = Request::fromGlobals();
