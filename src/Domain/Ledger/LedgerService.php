@@ -202,4 +202,27 @@ final class LedgerService
       return $journalId;
     }, 3);
   }
+  public function availableBalance(string $accountId): string
+  {
+    $pdo = \App\Infrastructure\Db\Connection::pdo();   
+  $stmt = $pdo->prepare("SELECT balance_minor FROM accounts WHERE id=? LIMIT 1");    
+  $stmt->execute([$accountId]);    
+  $row = $stmt->fetch();    
+  $bal = $row ? \Brick\Math\BigInteger::of((string)$row["balance_minor"]) : \Brick\Math\BigInteger::zero();  
+  $held = \Brick\Math\BigInteger::of($this->activeHoldsTotal($accountId));    
+  $avail = $bal->minus($held);    
+  if ($avail->isLessThan(\Brick\Math\BigInteger::zero())) $avail = \Brick\Math\BigInteger::zero();    
+  return $avail->toBase(10);  
+  } 
+
+  public function reserveForWithdrawal(string $accountId, string $holdRef, string $amountMinor): void  
+  {    
+    $avail = \Brick\Math\BigInteger::of($this->availableBalance($accountId));    
+    $amt = \Brick\Math\BigInteger::of($amountMinor);    
+    if ($amt->isLessThanOrEqualTo(\Brick\Math\BigInteger::zero())) 
+      throw new \DomainException("invalid_amount");    
+    if ($avail->isLessThan($amt)) 
+      throw new \DomainException("insufficient_available_balance");    
+    $this->placeHold($accountId, $holdRef, $amountMinor, "withdrawal_reserve");  
+    }
 }
