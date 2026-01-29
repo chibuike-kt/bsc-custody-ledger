@@ -1,0 +1,9 @@
+/vendor/
+/.env
+/storage/
+/var/
+/.cache/
+/logs/
+/coverage/
+*.log
+.DS_Store
