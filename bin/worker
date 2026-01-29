@@ -1,0 +1,14 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+
+require __DIR__ . '/../vendor/autoload.php';
+
+use Dotenv\Dotenv;
+use Symfony\Component\Console\Application;
+
+Dotenv::createImmutable(dirname(__DIR__))->safeLoad();
+
+$app = new Application('bsc-custody-ledger', '0.1.0');
+$app->add(new \App\Domain\Deposits\Commands\ScanUsdtDepositsCommand());
+$app->run();
