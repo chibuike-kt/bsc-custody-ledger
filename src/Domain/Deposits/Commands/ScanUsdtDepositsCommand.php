@@ -5,6 +5,7 @@ namespace App\Domain\Deposits\Commands;
 
 use App\Infrastructure\Db\Connection;
 use App\Infrastructure\Rpc\JsonRpcClient;
+use Brick\Math\BigInteger;
 use Ramsey\Uuid\Uuid;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -35,14 +36,28 @@ final class ScanUsdtDepositsCommand extends Command
       return Command::SUCCESS;
     }
 
-    // choose scan range (very simple first pass)
     $headHex = (string)$rpc->call('eth_blockNumber');
-    $head = hexdec($headHex);
+    $head = (int)BigInteger::fromBase(ltrim(strtolower($headHex), '0x'), 16)->toBase(10);
 
-    $from = max(0, $head - 200); // last ~200 blocks (tune)
-    $to   = $head;
+    // cursor key for this scanner
+    $cursorKey = 'bsc_usdt_scan_block';
 
-    // build eth_getLogs filter for Transfer logs
+    // read cursor (default to head-5000 for first run so you can catch recent history)
+    $stmt = $pdo->prepare("SELECT cursor_value FROM chain_cursors WHERE chain='bsc' AND cursor_key=? LIMIT 1");
+    $stmt->execute([$cursorKey]);
+    $row = $stmt->fetch();
+    $cursor = $row ? (int)$row['cursor_value'] : max(0, $head - 5000);
+
+    // chunk size per run (tune as your RPC allows)
+    $chunk = 1200;
+    $from = min($head, $cursor + 1);
+    $to   = min($head, $from + $chunk);
+
+    if ($from > $to) {
+      $output->writeln("head={$head} cursor={$cursor} nothing_to_scan");
+      return Command::SUCCESS;
+    }
+
     // topic[2] is "to" (indexed), left-padded 32 bytes
     $topicsTo = [];
     foreach ($addresses as $a) {
@@ -68,10 +83,12 @@ final class ScanUsdtDepositsCommand extends Command
     foreach ($logs as $log) {
       $txHash = strtolower((string)($log['transactionHash'] ?? ''));
       $logIndexHex = (string)($log['logIndex'] ?? '0x0');
-      $logIndex = hexdec($logIndexHex);
+      $logIndex = (int)BigInteger::fromBase(ltrim(strtolower($logIndexHex), '0x'), 16)->toBase(10);
 
       $blockHex = (string)($log['blockNumber'] ?? '0x0');
-      $blockNum = hexdec($blockHex);
+      $blockNum = (int)BigInteger::fromBase(ltrim(strtolower($blockHex), '0x'), 16)->toBase(10);
+
+      $blockHash = strtolower((string)($log['blockHash'] ?? ''));
 
       $topics = $log['topics'] ?? [];
       if (!is_array($topics) || count($topics) < 3) continue;
@@ -82,21 +99,19 @@ final class ScanUsdtDepositsCommand extends Command
       $fromAddr = '0x' . substr($fromTopic, 26);
       $toAddr   = '0x' . substr($toTopic, 26);
 
-      $amountRaw= (string)hexdec($amountHex);
       $amountHex = (string)($log['data'] ?? '0x0');
-      $hex= ltrim(strtolower($amountHex), "0x");
+      $hex = ltrim(strtolower($amountHex), '0x');
+      if ($hex === '') $hex = '0';
+      $amountRaw = BigInteger::fromBase($hex, 16)->toBase(10);
 
-      if ( $hex=== "")  $hex= "0";
-
-       $amountRaw= \Brick\Math\BigInteger::fromBase($hex, 16)->toBase(10);
+      $externalRef = 'bsc:usdt:' . $txHash . ':' . $logIndex;
 
       try {
         $stmt = $pdo->prepare("
           INSERT INTO chain_deposits
-  (id, chain, token_contract, tx_hash, log_index, from_address, to_address, amount_raw, block_number, status, external_ref)
-VALUES
-  (?, 'bsc', ?, ?, ?, ?, ?, ?, ?, 'detected', ?)
-
+            (id, chain, token_contract, tx_hash, log_index, from_address, to_address, amount_raw, block_number, block_hash, status, external_ref)
+          VALUES
+            (?, 'bsc', ?, ?, ?, ?, ?, ?, ?, ?, 'detected', ?)
         ");
         $stmt->execute([
           Uuid::uuid4()->toString(),
@@ -106,15 +121,38 @@ VALUES
           $fromAddr,
           $toAddr,
           $amountRaw,
-          $blockNum
+          $blockNum,
+          $blockHash !== '' ? $blockHash : null,
+          $externalRef,
         ]);
         $inserted++;
       } catch (\Throwable $e) {
-        // duplicates are expected due to retries
+        // duplicates expected
       }
     }
 
-    $output->writeln("scanned blocks {$from}-{$to}, logs=" . count($logs) . ", inserted={$inserted}");
+    // advance cursor safely to "to"
+    $pdo->beginTransaction();
+    try {
+      $stmt = $pdo->prepare("SELECT id FROM chain_cursors WHERE chain='bsc' AND cursor_key=? LIMIT 1 FOR UPDATE");
+      $stmt->execute([$cursorKey]);
+      $curRow = $stmt->fetch();
+
+      if ($curRow) {
+        $u = $pdo->prepare("UPDATE chain_cursors SET cursor_value=? WHERE chain='bsc' AND cursor_key=?");
+        $u->execute([$to, $cursorKey]);
+      } else {
+        $i = $pdo->prepare("INSERT INTO chain_cursors (id, chain, cursor_key, cursor_value) VALUES (?, 'bsc', ?, ?)");
+        $i->execute([Uuid::uuid4()->toString(), $cursorKey, $to]);
+      }
+
+      $pdo->commit();
+    } catch (\Throwable $e) {
+      if ($pdo->inTransaction()) $pdo->rollBack();
+      throw $e;
+    }
+
+    $output->writeln("head={$head} cursor={$cursor} scanned={$from}-{$to} logs=" . count($logs) . " inserted={$inserted}");
     return Command::SUCCESS;
   }
 }
