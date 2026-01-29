@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS chain_cursors (
+  id CHAR(36) PRIMARY KEY,
+  chain VARCHAR(20) NOT NULL,
+  cursor_key VARCHAR(60) NOT NULL,
+  cursor_value BIGINT NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_chain_key (chain, cursor_key)
+) ENGINE=InnoDB;
