@@ -155,4 +155,6 @@ final class ScanUsdtDepositsCommand extends Command
     $output->writeln("head={$head} cursor={$cursor} scanned={$from}-{$to} logs=" . count($logs) . " inserted={$inserted}");
     return Command::SUCCESS;
   }
-}
+  
+    }
+
